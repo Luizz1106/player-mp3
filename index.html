@@ -108,6 +108,14 @@ main{max-width:720px;margin:0 auto;padding:16px}
 .modal input[type=text]{width:100%;background:#222;border:1px solid var(--line);color:#fff;border-radius:10px;padding:12px;font-size:15px;outline:none;margin-bottom:12px}
 .opt{display:block;width:100%;text-align:left;background:#222;border:1px solid var(--line);color:#fff;padding:13px;border-radius:12px;font-size:14px;margin-bottom:8px;cursor:pointer}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:120px;background:#222;border:1px solid var(--gold);color:#fff;padding:11px 18px;border-radius:999px;font-size:13px;z-index:80;display:none;max-width:90vw;text-align:center}
+/* tela apagada */
+#blackScreen{position:fixed;inset:0;z-index:200;background:#000;display:none;flex-direction:column;align-items:center;justify-content:center;cursor:pointer}
+#blackTitle{color:#161616;font-size:15px;text-align:center;padding:0 24px}
+.dl-info{display:flex;gap:12px;align-items:center;margin-bottom:12px}
+.dl-info img{width:96px;height:54px;object-fit:cover;border-radius:8px;background:#222}
+.dl-info .nm{font-weight:600;font-size:14px}
+.dl-info .st{font-size:12px;color:#999;margin-top:4px}
+.black-hint{position:absolute;bottom:28px;left:0;right:0;color:#1c1c1c;font-size:12px;text-align:center}
 @media(min-width:640px){.modal-bg{align-items:center}.modal{border-radius:18px}}
 </style>
 </head>
@@ -141,6 +149,7 @@ main{max-width:720px;margin:0 auto;padding:16px}
     <div class="yt-row">
       <input type="url" id="ytInput" placeholder="Cole o link da música do YouTube..." inputmode="url">
       <button class="btn" id="ytAddBtn">▶ Tocar</button>
+      <button class="btn ghost" id="ytDlBtn">⬇ Baixar</button>
     </div>
     <p class="yt-note">O app tenta extrair o áudio direto — aí toca com a tela desligada, igual MP3. Se não conseguir, usa o player do YouTube.</p>
     <div id="ytStatus" class="scan-status" style="display:none"></div>
@@ -159,11 +168,12 @@ main{max-width:720px;margin:0 auto;padding:16px}
       <li>Toque em <b>＋ Adicionar músicas</b> e escolha os MP3 do celular.</li>
       <li>Ou toque em <b>📁 Adicionar pasta</b> e escolha a pasta Música / Downloads.</li>
       <li>Cole o link de uma música do YouTube no campo acima e toque em <b>▶ Tocar</b> — ela fica salva na aba <b>YouTube</b>.</li>
+    <li>Para baixar: cole o link e toque em <b>⬇ Baixar</b>, ou compartilhe o vídeo do YouTube direto para o app — escolha <b>MP3</b> (só o áudio, fica na biblioteca) ou <b>MP4</b> (o vídeo, salvo em Documentos).</li>
       <li>Toque numa música para tocar. O ♥ salva nos favoritos.</li>
       <li>Para instalar: toque em <b>⬇ Instalar app</b> no topo, ou no menu ⋮ do Chrome → <b>Instalar app / Adicionar à tela inicial</b>.</li>
     </ol>
   </section>
-  <div class="app-version">Meu Player MP3 • v1.0.9</div>
+  <div class="app-version">Meu Player MP3 • v1.0.10</div>
 </main>
 
 <!-- mini player -->
@@ -204,6 +214,7 @@ main{max-width:720px;margin:0 auto;padding:16px}
     <button class="btn ghost small" id="favBtn2">♡ Favoritar</button>
     <button class="btn ghost small" id="addToPlBtn2">＋ Playlist</button>
     <button class="btn ghost small" id="volBtn">🔊 Volume</button>
+    <button class="btn ghost small" id="blackBtn">🌙 Tela apagada</button>
   </div>
   <div class="queue"><h3>Na fila</h3><div id="queueList"></div></div>
 </div>
@@ -217,6 +228,24 @@ main{max-width:720px;margin:0 auto;padding:16px}
   </div>
 </div>
 
+<!-- baixar do YouTube -->
+<div class="modal-bg" id="dlBg">
+  <div class="modal">
+    <h3>Baixar do YouTube</h3>
+    <div class="dl-info"><img id="dlCover" src="" alt=""><div><div class="nm" id="dlName">—</div><div class="st" id="dlStatus"></div></div></div>
+    <button class="opt" id="dlPlayBtn">▶ Tocar no app</button>
+    <button class="opt" id="dlMp3Btn">⬇ Baixar MP3 (só o áudio)</button>
+    <button class="opt" id="dlMp4Btn">⬇ Baixar MP4 (vídeo)</button>
+    <button class="btn ghost" id="dlCloseBtn" style="width:100%">Fechar</button>
+  </div>
+</div>
+
+<!-- tela apagada -->
+<div id="blackScreen" style="display:none">
+  <div id="blackTitle">—</div>
+  <div class="black-hint">Toque na tela para voltar</div>
+</div>
+
 <div class="toast" id="toast"></div>
 <audio id="audio" preload="metadata"></audio>
 
@@ -225,6 +254,9 @@ const $=s=>document.querySelector(s);
 const audio=$('#audio');
 const isNative = () => !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 const mediaStore = () => window.Capacitor ? window.Capacitor.registerPlugin('CapacitorMediaStore') : null;
+const fsPlugin = () => window.Capacitor ? window.Capacitor.registerPlugin('Filesystem') : null;
+const sharePlugin = () => window.Capacitor ? window.Capacitor.registerPlugin('Share') : null;
+const shareTarget = () => window.Capacitor ? window.Capacitor.registerPlugin('CapacitorShareTarget') : null;
 let tracks=[], playlists=[], queue=[], qIndex=-1, shuffle=false, repeatMode=0; // 0 off, 1 all, 2 one
 let currentTab='all', currentPlId=null, deferredPrompt=null, currentCoverUrl=null, seeking=false;
 
@@ -308,7 +340,7 @@ function filtered(){
   const q=($('#search').value||'').toLowerCase();
   let list=tracks;
   if(currentTab==='fav') list=list.filter(t=>t.favorite);
-  if(currentTab==='yt') list=list.filter(t=>t.source==='youtube');
+  if(currentTab==='yt') list=list.filter(t=>['youtube','download','download-video'].includes(t.source));
   if(currentPlId) list=list.filter(t=>{const p=playlists.find(x=>x.id===currentPlId);return p&&p.trackIds.includes(t.id)});
   if(q) list=list.filter(t=>(t.title+' '+t.artist+' '+t.album).toLowerCase().includes(q));
   return list;
@@ -326,8 +358,9 @@ function render(){
   el.innerHTML='';
   list.forEach(t=>{
     ensureCover(t);
+    const dlTag=t.source==='download-video'?' • 🎬 MP4':t.source==='download'?' • ⬇ MP3':'';
     const d=document.createElement('div'); d.className='track'+(queue[qIndex]&&queue[qIndex].id===t.id?' playing':'');
-    d.innerHTML='<div class="cover">'+coverHTML(t)+'</div><div class="tinfo"><div class="t"></div><div class="a"></div><div class="d">'+fmt(t.duration)+' • '+fmtSize(t.size)+'</div></div><button class="icon-btn fav" title="Favorito">'+(t.favorite?'♥':'♡')+'</button><button class="icon-btn dim more" title="Opções">⋯</button>';
+    d.innerHTML='<div class="cover">'+coverHTML(t)+'</div><div class="tinfo"><div class="t"></div><div class="a"></div><div class="d">'+fmt(t.duration)+' • '+fmtSize(t.size)+dlTag+'</div></div><button class="icon-btn fav" title="Favorito">'+(t.favorite?'♥':'♡')+'</button><button class="icon-btn dim more" title="Opções">⋯</button>';
     d.querySelector('.t').textContent=t.title; d.querySelector('.a').textContent=t.artist+(t.album?' • '+t.album:'');
     d.onclick=e=>{if(e.target.closest('.fav')||e.target.closest('.more'))return; playTrack(t)};
     d.querySelector('.fav').onclick=async e=>{e.stopPropagation();t.favorite=!t.favorite;await dbPut('tracks',t);render();updateFavBtn()};
@@ -359,8 +392,8 @@ async function addYoutube(url){
   const existing=tracks.find(t=>t.videoId===id);
   if(existing){ currentTab='yt'; render(); playTrack(existing); toast('Já estava na lista — tocando'); return; }
   toast('Buscando dados do vídeo...');
-  let title='Vídeo do YouTube', artist='YouTube', thumb='https://i.ytimg.com/vi/'+id+'/hqdefault.jpg';
-  try{ const r=await fetch('https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v='+id+'&format=json'); if(r.ok){ const j=await r.json(); title=j.title||title; artist=j.author_name||artist; if(j.thumbnail_url) thumb=j.thumbnail_url; } }catch(e){}
+  const meta=await getYtMeta(id);
+  const title=meta.title, artist=meta.artist, thumb=meta.thumb;
   const tr={id:'y_'+id, name:title, title, artist, album:'YouTube', duration:0, size:0, favorite:false, addedAt:Date.now(), source:'youtube', videoId:id, coverUrl:thumb, blob:null, picture:null};
   await dbPut('tracks', tr); tracks.push(tr); tracks.sort((a,b)=>a.title.localeCompare(b.title,'pt-BR'));
   $('#ytInput').value=''; currentTab='yt'; render(); playTrack(tr);
@@ -454,6 +487,113 @@ async function resolveYtAudio(videoId, excludeVia){
   }
   return null;
 }
+
+// ---------- baixar do YouTube (estilo Snaptube) ----------
+// MP3: extrai o áudio direto e guarda na biblioteca (toca offline, igual MP3).
+// MP4: baixa o vídeo para a pasta Documentos do celular (abre no player de vídeo do aparelho).
+// Depende das mesmas fontes do player (YouTube/Piped/Invidious/Cobalt) — se nenhuma responder, o download falha e o app avisa.
+function safeName(s){ return (s||'video').replace(/[\\/:*?"<>|]/g,'').replace(/\s+/g,' ').trim().slice(0,80)||'video'; }
+function b64ToBlob(b64, type){ const bin=atob(b64); const len=bin.length; const bytes=new Uint8Array(len); for(let i=0;i<len;i++) bytes[i]=bin.charCodeAt(i); return new Blob([bytes],{type:type||'audio/mp4'}); }
+async function getYtMeta(id){
+  let title='Vídeo do YouTube', artist='YouTube', thumb='https://i.ytimg.com/vi/'+id+'/hqdefault.jpg';
+  try{ const r=await fetch('https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v='+id+'&format=json'); if(r.ok){ const j=await r.json(); title=j.title||title; artist=j.author_name||artist; if(j.thumbnail_url) thumb=j.thumbnail_url; } }catch(e){}
+  return {title, artist, thumb};
+}
+async function resolveYtVideo(videoId){
+  try{
+    const r=await fetchTimeout('https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({videoId, context:{client:{clientName:'ANDROID', clientVersion:'19.09.37'}}})}, 8000);
+    if(r.ok){ const j=await r.json(); const sd=j.streamingData||{}; const fmts=(sd.formats||[]).filter(f=>(f.mimeType||'').startsWith('video/mp4')&&f.url); if(fmts.length){ fmts.sort((a,b)=>(b.height||0)-(a.height||0)); const pick=fmts.find(f=>(f.height||0)<=720)||fmts[fmts.length-1]; return {url:pick.url, duration:parseInt((j.videoDetails||{}).lengthSeconds||0)||0, via:'YouTube'}; } }
+  }catch(e){ console.warn('innertube video', e); }
+  for(const base of PIPED_APIS){
+    try{ const r=await fetchTimeout(base+'/streams/'+videoId, {}, 8000); if(!r.ok) continue; const j=await r.json(); const vs=(j.videoStreams||[]).filter(v=>!v.videoOnly&&v.mimeType==='video/mp4'&&v.url); if(vs.length){ vs.sort((a,b)=>b.height-a.height); const pick=vs.find(v=>v.height<=720)||vs[vs.length-1]; return {url:pick.url, duration:j.duration||0, via:'Piped'}; } }catch(e){ console.warn('piped video', base, e); }
+  }
+  for(const base of INVIDIOUS_APIS){
+    try{ const r=await fetchTimeout(base+'/api/v1/videos/'+videoId, {}, 8000); if(!r.ok) continue; const j=await r.json(); const fs=(j.formatStreams||[]).filter(f=>(f.type||'').startsWith('video/mp4')&&f.url); if(fs.length){ fs.sort((a,b)=>(parseInt(b.resolution)||0)-(parseInt(a.resolution)||0)); const pick=fs.find(f=>(parseInt(f.resolution)||0)<=720)||fs[fs.length-1]; return {url:pick.url, duration:j.lengthSeconds||0, via:'Invidious'}; } }catch(e){ console.warn('invidious video', base, e); }
+  }
+  try{ const r=await fetchTimeout('https://co.api.cobalt.tools/', {method:'POST', headers:{'Accept':'application/json','Content-Type':'application/json'}, body:JSON.stringify({url:'https://www.youtube.com/watch?v='+videoId, isAudioOnly:false})}, 8000); if(r.ok){ const j=await r.json(); if(j.url) return {url:j.url, duration:0, via:'Cobalt'}; } }catch(e){ console.warn('cobalt video', e); }
+  return null;
+}
+function setDlStatus(txt){ const el=$('#dlStatus'); if(el) el.textContent=txt||''; }
+let dlBusy=false, dlVideoId=null;
+async function downloadMp3(videoId){
+  if(dlBusy) return; if(!isNative()){ toast('Baixar só funciona no aplicativo instalado (APK)'); return; }
+  dlBusy=true; setDlStatus('Procurando o áudio...');
+  try{
+    const meta=await getYtMeta(videoId);
+    const a=await resolveYtAudio(videoId);
+    if(!a){ setDlStatus('Não consegui baixar — nenhuma fonte respondeu.'); toast('Não consegui baixar o áudio'); return; }
+    const tmp='dl-'+videoId+'.m4a';
+    const FS=fsPlugin();
+    let prog=null;
+    try{ prog=await FS.addListener('progress', p=>{ if(p.url===a.url && p.contentLength) setDlStatus('Baixando MP3... '+Math.round(p.bytes/p.contentLength*100)+'%'); }); }catch(e){}
+    setDlStatus('Baixando MP3... 0%');
+    await FS.downloadFile({url:a.url, path:tmp, directory:'DATA', progress:true});
+    if(prog) prog.remove().catch(()=>{});
+    setDlStatus('Salvando na biblioteca...');
+    const file=await FS.readFile({path:tmp, directory:'DATA'});
+    const blob=b64ToBlob(file.data, 'audio/mp4');
+    const dur=await getDuration(blob);
+    const tr={id:'d'+Date.now().toString(36)+Math.random().toString(36).slice(2,8), name:meta.title, title:meta.title, artist:meta.artist, album:'YouTube', duration:dur||a.duration||0, size:blob.size, favorite:false, addedAt:Date.now(), source:'download', videoId, coverUrl:meta.thumb, blob, picture:null};
+    await dbPut('tracks', tr); tracks.push(tr); tracks.sort((a,b)=>a.title.localeCompare(b.title,'pt-BR'));
+    await FS.deleteFile({path:tmp, directory:'DATA'}).catch(()=>{});
+    render(); setDlStatus('MP3 salvo na biblioteca ✓'); toast('MP3 baixado ✓');
+  }catch(e){ console.error(e); setDlStatus('Falha ao baixar: '+(e&&e.message?e.message:e)); }
+  finally{ dlBusy=false; }
+}
+async function downloadMp4(videoId){
+  if(dlBusy) return; if(!isNative()){ toast('Baixar só funciona no aplicativo instalado (APK)'); return; }
+  dlBusy=true; setDlStatus('Procurando o vídeo...');
+  try{
+    const meta=await getYtMeta(videoId);
+    const v=await resolveYtVideo(videoId);
+    if(!v){ setDlStatus('Não consegui baixar o vídeo — nenhuma fonte respondeu.'); toast('Não consegui baixar o vídeo'); return; }
+    const name=safeName(meta.title)+'.mp4';
+    const FS=fsPlugin();
+    let prog=null;
+    try{ prog=await FS.addListener('progress', p=>{ if(p.url===v.url && p.contentLength) setDlStatus('Baixando MP4... '+Math.round(p.bytes/p.contentLength*100)+'%'); }); }catch(e){}
+    setDlStatus('Baixando MP4... 0%');
+    await FS.downloadFile({url:v.url, path:name, directory:'DOCUMENTS', progress:true});
+    if(prog) prog.remove().catch(()=>{});
+    let size=0; try{ const st=await FS.stat({path:name, directory:'DOCUMENTS'}); size=st.size||0; }catch(e){}
+    const tr={id:'dv'+Date.now().toString(36)+Math.random().toString(36).slice(2,8), name:meta.title, title:meta.title, artist:meta.artist, album:'YouTube', duration:v.duration||0, size, favorite:false, addedAt:Date.now(), source:'download-video', videoId, fileName:name, coverUrl:meta.thumb, blob:null, picture:null};
+    await dbPut('tracks', tr); tracks.push(tr); tracks.sort((a,b)=>a.title.localeCompare(b.title,'pt-BR'));
+    render(); setDlStatus('MP4 salvo em Documentos ✓ — toque nele para abrir'); toast('MP4 baixado ✓');
+  }catch(e){ console.error(e); setDlStatus('Falha ao baixar: '+(e&&e.message?e.message:e)); }
+  finally{ dlBusy=false; }
+}
+async function openVideoFile(t){
+  try{
+    const FS=fsPlugin(); const u=await FS.getUri({path:t.fileName, directory:'DOCUMENTS'});
+    await sharePlugin().share({url:u.uri, dialogTitle:'Abrir vídeo com'});
+  }catch(e){ toast('Vídeo salvo em Documentos — abra pelo gerenciador de arquivos'); }
+}
+async function openDownloadSheet(videoId){
+  dlVideoId=videoId;
+  $('#dlCover').src='https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg';
+  $('#dlName').textContent='Carregando...'; setDlStatus('');
+  $('#dlBg').style.display='flex';
+  const meta=await getYtMeta(videoId);
+  if(dlVideoId!==videoId) return;
+  $('#dlName').textContent=meta.title; $('#dlCover').src=meta.thumb;
+}
+// receber link compartilhado do YouTube (só no APK)
+function setupShareTarget(){
+  if(!isNative()) return;
+  try{
+    const ST=shareTarget();
+    ST.addListener('shareReceived', ev=>{
+      const text=((ev&&ev.texts)||[]).join('\n');
+      const m=text.match(/https?:\/\/(www\.|music\.)?youtube\.com\/watch\?[^\s"']+|https?:\/\/youtu\.be\/[^\s"']+/);
+      if(!m) return;
+      const id=extractVideoId(m[0]);
+      if(!id) return;
+      currentTab='yt'; render();
+      $('#ytInput').value=m[0];
+      openDownloadSheet(id);
+      toast('Link recebido do YouTube ✓');
+    }).catch(()=>{});
+  }catch(e){ console.warn('share-target', e); }
+}
 let ytCurrentVia=null, ytFailedVias=[], ytAudioTrackId=null;
 async function loadYoutubeTrack(t){
   ytIframeActive=false; stopYtTimer(); ytFailedVias=[]; ytAudioTrackId=t.id;
@@ -498,6 +638,7 @@ async function playTrack(t){
 }
 function loadCurrent(){
   const t=queue[qIndex]; if(!t) return;
+  if(t.source==='download-video'){ openVideoFile(t); updatePlayerUI(); renderQueue(); return; }
   ensureCover(t);
   if(currentCoverUrl) URL.revokeObjectURL(currentCoverUrl);
   stopYtTimer();
@@ -535,6 +676,7 @@ function updatePlayerUI(){
   $('#pbTitle').textContent=t.title; $('#pbArtist').textContent=t.artist;
   $('#bigTitle').textContent=t.title; $('#bigArtist').textContent=t.artist;
   $('#bigCount').textContent='Música '+(qIndex+1)+' de '+queue.length+(t.album?' • '+t.album:'');
+  $('#blackTitle').textContent=t.title+' — '+t.artist;
   const cov=coverHTML(t);
   $('#miniCover').innerHTML=cov; $('#bigCover').innerHTML=cov;
   $('#playBtn').textContent=isPlaying()?'⏸':'▶'; $('#playBtn2').textContent=isPlaying()?'⏸':'▶';
@@ -604,8 +746,10 @@ function openTrackMenu(t){
   const mk=(label,fn)=>{const btn=document.createElement('button');btn.className='opt';btn.textContent=label;btn.onclick=()=>{closeModal();fn()};b.appendChild(btn)};
   mk('▶ Tocar agora',()=>playTrack(t));
   mk(t.favorite?'♡ Tirar dos favoritos':'♥ Adicionar aos favoritos',async()=>{t.favorite=!t.favorite;await dbPut('tracks',t);render();updatePlayerUI()});
+  if(t.source==='youtube'){ mk('⬇ Baixar MP3',()=>downloadMp3(t.videoId)); mk('⬇ Baixar MP4',()=>downloadMp4(t.videoId)); }
+  if(t.source==='download-video'){ mk('🎬 Abrir vídeo',()=>openVideoFile(t)); }
   mk('＋ Adicionar a uma playlist',()=>openAddToPlaylist(t));
-  mk('🗑 Excluir do app',async()=>{if(!confirm('Excluir "'+t.title+'" do app? O arquivo original no celular não é apagado.'))return;await dbDel('tracks',t.id);tracks=tracks.filter(x=>x.id!==t.id);playlists.forEach(p=>p.trackIds=p.trackIds.filter(id=>id!==t.id));for(const p of playlists)await dbPut('playlists',p);if(queue[qIndex]&&queue[qIndex].id===t.id){audio.pause();queue=[];qIndex=-1;$('#playerBar').style.display='none'}render()});
+  mk('🗑 Excluir do app',async()=>{if(!confirm('Excluir "'+t.title+'" do app? O arquivo original no celular não é apagado.'))return;if(t.source==='download-video'){try{await fsPlugin().deleteFile({path:t.fileName,directory:'DOCUMENTS'})}catch(e){}}await dbDel('tracks',t.id);tracks=tracks.filter(x=>x.id!==t.id);playlists.forEach(p=>p.trackIds=p.trackIds.filter(id=>id!==t.id));for(const p of playlists)await dbPut('playlists',p);if(queue[qIndex]&&queue[qIndex].id===t.id){audio.pause();queue=[];qIndex=-1;$('#playerBar').style.display='none'}render()});
 }
 function openAddToPlaylist(t){
   openModal('Adicionar a uma playlist','');
@@ -682,6 +826,12 @@ async function scanDevice(silent){
 
 // ---------- eventos ----------
 $('#ytAddBtn').onclick=()=>addYoutube($('#ytInput').value);
+$('#ytDlBtn').onclick=()=>{const id=extractVideoId($('#ytInput').value); if(!id){toast('Cole o link do YouTube primeiro');return} openDownloadSheet(id)};
+$('#dlPlayBtn').onclick=()=>{ if(!dlVideoId) return; const id=dlVideoId; $('#dlBg').style.display='none'; addYoutube('https://www.youtube.com/watch?v='+id); };
+$('#dlMp3Btn').onclick=()=>{ if(dlVideoId) downloadMp3(dlVideoId); };
+$('#dlMp4Btn').onclick=()=>{ if(dlVideoId) downloadMp4(dlVideoId); };
+$('#dlCloseBtn').onclick=()=>{ $('#dlBg').style.display='none'; };
+$('#dlBg').onclick=e=>{ if(e.target.id==='dlBg') $('#dlBg').style.display='none'; };
 $('#ytInput').addEventListener('keydown',e=>{if(e.key==='Enter')addYoutube($('#ytInput').value)});
 $('#addFilesBtn').onclick=()=>$('#fileInput').click();
 $('#addFolderBtn').onclick=()=>$('#folderInput').click();
@@ -703,6 +853,36 @@ $('#volBtn').onclick=()=>{const v=prompt('Volume (0 a 100):',Math.round((ytViaIf
 $('#pbInfo').onclick=()=>$('#fullPlayer').classList.add('open');
 $('#miniCover').onclick=()=>$('#fullPlayer').classList.add('open');
 $('#closeFull').onclick=()=>$('#fullPlayer').classList.remove('open');
+
+// ---------- modo tela apagada ----------
+// A tela continua ligada por dentro (Wake Lock), mas fica toda preta —
+// parece desligada e o YouTube não pausa, porque a tela nunca apagou.
+// Sem plugin: o Wake Lock é API do próprio navegador/WebView.
+let wakeLock=null, blackOn=false;
+async function requestWakeLock(){
+  try{
+    if(!('wakeLock' in navigator)) return false;
+    wakeLock=await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release',()=>{ if(blackOn) requestWakeLock(); });
+    return true;
+  }catch(e){ return false; }
+}
+async function setBlack(on){
+  blackOn=on;
+  const el=$('#blackScreen');
+  el.style.display=on?'flex':'none';
+  if(on){
+    const t=queue[qIndex]; if(t) $('#blackTitle').textContent=t.title+' — '+t.artist;
+    const ok=await requestWakeLock();
+    if(!ok) toast('Tela apagada ligada, mas este aparelho pode bloquear sozinho — o bloqueio de tela não está disponível aqui.');
+  } else {
+    try{ if(wakeLock) await wakeLock.release(); }catch(e){}
+    wakeLock=null;
+  }
+}
+document.addEventListener('visibilitychange',()=>{ if(blackOn && !document.hidden) requestWakeLock(); });
+$('#blackBtn').onclick=()=>setBlack(true);
+$('#blackScreen').onclick=()=>setBlack(false);
 $('#modalClose').onclick=closeModal;
 $('#modalBg').onclick=e=>{if(e.target.id==='modalBg')closeModal()};
 
@@ -719,6 +899,7 @@ openDB().then(async()=>{
   await loadAll();
   if(isNative()){
     $('#scanBtn').style.display='';
+    setupShareTarget();
     // tenta de novo ao abrir enquanto nenhuma música do aparelho estiver na lista
     if(!localStorage.getItem('autoScanDone') || !tracks.some(t=>t.source==='device')){
       localStorage.setItem('autoScanDone','1');
