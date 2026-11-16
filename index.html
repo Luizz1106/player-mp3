@@ -84,6 +84,7 @@ main{max-width:720px;margin:0 auto;padding:16px}
 .big-artist{text-align:center;color:var(--muted);font-size:15px;margin-top:6px}
 .big-count{text-align:center;color:#666;font-size:12px;margin-top:6px}
 .seek-wrap{max-width:520px;width:100%;margin:22px auto 0}
+.scan-status{font-size:12px;color:#c9a227;margin-top:10px;line-height:1.5;text-align:left}
 .seek-wrap input{width:100%;accent-color:var(--gold)}
 .times{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:6px}
 .big-controls{display:flex;align-items:center;justify-content:center;gap:18px;margin-top:22px}
@@ -128,7 +129,8 @@ main{max-width:720px;margin:0 auto;padding:16px}
     <div class="actions">
       <button class="btn" id="addFilesBtn">＋ Adicionar músicas</button>
       <button class="btn ghost" id="addFolderBtn">📁 Adicionar pasta</button>
-      <button class="btn ghost" id="scanBtn" style="display:none">🔍 Buscar músicas do celular</button>
+      <button class="btn" id="scanBtn" style="display:none">🔍 Buscar músicas do celular</button>
+      <div id="scanStatus" class="scan-status" style="display:none"></div>
       <button class="btn ghost" id="newPlBtn">＋ Nova playlist</button>
     </div>
     <input type="file" id="fileInput" accept="audio/*,.mp3,.m4a,.wav,.ogg,.flac" multiple hidden>
@@ -446,13 +448,39 @@ function newPlaylist(){
 
 // ---------- busca automática no celular (só no APK) ----------
 async function scanDevice(silent){
+  const statusEl=$('#scanStatus');
+  const setStatus=t=>{ if(statusEl){ statusEl.style.display=''; statusEl.textContent=t; } };
+  const isAudio=s=>s && (((s.mimeType||'').indexOf('audio')===0) || /\.(mp3|m4a|flac|wav|ogg|aac|wma)$/i.test(s.displayName||''));
   if(!isNative()){ if(!silent) toast('A busca automática só funciona no APK'); return; }
   try{
     const MS=mediaStore();
-    try{ await MS.requestPermissions({types:['audio']}); }catch(e){}
+    let perm={};
+    try{ perm=await MS.checkPermissions(); }catch(e){}
+    const audioState=(perm.readMediaAudio || perm.readExternalStorage || '').toString().toUpperCase();
+    if(audioState && audioState!=='GRANTED'){
+      setStatus('Permissão de áudio: '+audioState.toLowerCase()+' — vou pedir a permissão agora.');
+    }
+    try{ const r=await MS.requestPermissions({types:['audio']}); if(r) perm=r; }catch(e){}
+    const audioState2=(perm.readMediaAudio || perm.readExternalStorage || '').toString().toUpperCase();
+    if(audioState2 && audioState2!=='GRANTED'){
+      setStatus('Permissão de áudio negada. Libere em Ajustes do Android → Apps → Meu Player MP3 → Permissões → Música e áudio, depois toque em 🔍 de novo.');
+      if(!silent) toast('Permissão de áudio negada. Libere nas configurações do app.');
+      return;
+    }
     if(!silent) toast('Buscando músicas do celular...');
-    const res=await MS.getMediasByType({mediaType:'audio', includeExternal:true, sortBy:'TITLE', limit:5000});
-    const items=(res.media||[]).filter(s=>s && (!s.mimeType || s.mimeType.indexOf('audio')===0) && (s.duration||0)>0);
+    setStatus('Buscando músicas do celular...');
+    let items=[];
+    try{
+      const res=await MS.getMediasByType({mediaType:'audio', includeExternal:true, sortBy:'TITLE', limit:5000});
+      items=(res.media||[]).filter(isAudio);
+    }catch(e){ console.error('byType', e); }
+    if(!items.length){
+      // reserva: lista tudo e filtra áudio no app
+      try{
+        const res2=await MS.getMedias({includeExternal:true, sortBy:'TITLE', limit:5000});
+        items=(res2.media||[]).filter(isAudio);
+      }catch(e){ console.error('all', e); }
+    }
     const favByUri={}; tracks.filter(t=>t.source==='device').forEach(t=>{favByUri[t.nativeUri]=!!t.favorite});
     for(const t of tracks.filter(t=>t.source==='device')){ await dbDel('tracks', t.id); }
     tracks=tracks.filter(t=>t.source!=='device');
@@ -462,10 +490,13 @@ async function scanDevice(silent){
       await dbPut('tracks', tr); tracks.push(tr); added++;
     }
     tracks.sort((a,b)=>a.title.localeCompare(b.title,'pt-BR'));
-    render(); toast(added? added+' música(s) encontrada(s) no celular ✓' : 'Nenhuma música encontrada no celular');
+    render();
+    if(added){ setStatus('Última busca: '+added+' música(s) encontrada(s) ✓'); toast(added+' música(s) encontrada(s) no celular ✓'); }
+    else { setStatus('Última busca: 0 músicas. A permissão está liberada, mas o sistema não listou nenhum áudio — toque em ＋ Adicionar músicas para escolher manualmente.'); toast('Nenhuma música encontrada na busca automática'); }
   }catch(e){
     console.error(e);
-    if(!silent) toast('Não consegui buscar as músicas. Verifique a permissão de áudio do app.');
+    setStatus('Não consegui buscar as músicas ('+(e&&e.message?e.message:'erro')+'). Toque em 🔍 para tentar de novo.');
+    if(!silent) toast('Não consegui buscar as músicas. Toque em 🔍 para tentar de novo.');
   }
 }
 
@@ -506,7 +537,8 @@ openDB().then(async()=>{
   await loadAll();
   if(isNative()){
     $('#scanBtn').style.display='';
-    if(!localStorage.getItem('autoScanDone')){
+    // tenta de novo ao abrir enquanto nenhuma música do aparelho estiver na lista
+    if(!localStorage.getItem('autoScanDone') || !tracks.some(t=>t.source==='device')){
       localStorage.setItem('autoScanDone','1');
       setTimeout(()=>scanDevice(true), 800);
     }
