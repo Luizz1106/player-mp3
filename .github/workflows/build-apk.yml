@@ -11,6 +11,7 @@ on:
       - "capacitor.config.json"
       - "package.json"
       - "package-lock.json"
+            - "scripts/patch-manifest.py"
       - ".github/workflows/build-apk.yml"
   workflow_dispatch:
 
@@ -54,6 +55,8 @@ jobs:
 
       - name: Criar projeto Android (Capacitor)
         run: npx cap add android
+    - name: Ativar recebimento de links (Compartilhar)
+    run: python3 scripts/patch-manifest.py
 
       - name: Gerar ícone do app
         continue-on-error: true
