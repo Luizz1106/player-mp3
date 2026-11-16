@@ -66,3 +66,27 @@ jobs:
         run: |
           cd android
           ./gradlew assembleDebug
+
+      - name: Renomear o APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk Meu-Player-MP3.apk
+
+      - name: Guardar o APK como artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: Meu-Player-MP3-apk
+          path: Meu-Player-MP3.apk
+
+      - name: Publicar na Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: "Meu Player MP3 v1.0.${{ github.run_number }}"
+          body: |
+            APK do Meu Player MP3 para instalar direto no celular.
+
+            Como instalar:
+            1. Baixe o arquivo Meu-Player-MP3.apk no celular.
+            2. Toque no arquivo e permita "Instalar de fontes desconhecidas" quando o Android pedir.
+            3. Abra o app e toque em "Adicionar músicas" para escolher os MP3 do celular.
+          files: Meu-Player-MP3.apk
+          generate_release_notes: true
