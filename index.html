@@ -141,7 +141,8 @@ main{max-width:720px;margin:0 auto;padding:16px}
       <input type="url" id="ytInput" placeholder="Cole o link da música do YouTube..." inputmode="url">
       <button class="btn" id="ytAddBtn">▶ Tocar</button>
     </div>
-    <p class="yt-note">O YouTube pode pausar ao desligar a tela — é limite do player dele. Teste no teu celular.</p>
+    <p class="yt-note">O app tenta extrair o áudio direto — aí toca com a tela desligada, igual MP3. Se não conseguir, usa o player do YouTube.</p>
+    <div id="ytStatus" class="scan-status" style="display:none"></div>
     <input type="file" id="fileInput" accept="audio/*,.mp3,.m4a,.wav,.ogg,.flac" multiple hidden>
     <input type="file" id="folderInput" webkitdirectory multiple hidden>
   </section>
@@ -363,6 +364,7 @@ async function addYoutube(url){
   $('#ytInput').value=''; currentTab='yt'; render(); playTrack(tr);
 }
 async function playYoutube(t){
+  ytIframeActive=true;
   const ok=await loadYtApi();
   if(!ok){ toast('Não consegui carregar o player do YouTube. Verifique a internet.'); return; }
   if(!ytPlayer){
@@ -390,14 +392,88 @@ function ytTick(){
   if(d>0 && t.duration!==Math.round(d)){ t.duration=Math.round(d); dbPut('tracks',t); }
   if('mediaSession' in navigator&&navigator.mediaSession.setPositionState){try{navigator.mediaSession.setPositionState({duration:d,playbackRate:1,position:c})}catch(e){}}
 }
-function isYtTrack(t){ return !!(t&&t.source==='youtube'); }
-function isPlaying(){ const t=queue[qIndex]; if(isYtTrack(t)){ return !!(ytPlayer&&ytPlayer.getPlayerState&&ytPlayer.getPlayerState()===1); } return !audio.paused; }
-function resumeCurrent(){ const t=queue[qIndex]; if(!t)return; if(isYtTrack(t)){ if(ytPlayer&&ytPlayer.playVideo) ytPlayer.playVideo(); } else audio.play(); }
-function pauseCurrent(){ const t=queue[qIndex]; if(!t)return; if(isYtTrack(t)){ if(ytPlayer&&ytPlayer.pauseVideo) ytPlayer.pauseVideo(); } else audio.pause(); }
-function togglePlay(){ const t=queue[qIndex]; if(!t)return; if(isYtTrack(t)){ if(ytPlayer&&ytPlayer.getPlayerState){ ytPlayer.getPlayerState()===1?ytPlayer.pauseVideo():ytPlayer.playVideo(); } } else { audio.paused?audio.play():audio.pause(); } }
-function seekCurrent(sec){ const t=queue[qIndex]; if(!t)return; if(isYtTrack(t)){ if(ytPlayer&&ytPlayer.seekTo) ytPlayer.seekTo(sec,true); } else audio.currentTime=sec; }
-function currentTime(){ const t=queue[qIndex]; if(isYtTrack(t)&&ytPlayer&&ytPlayer.getCurrentTime) return ytPlayer.getCurrentTime()||0; return audio.currentTime||0; }
-function currentDuration(){ const t=queue[qIndex]; if(isYtTrack(t)&&ytPlayer&&ytPlayer.getDuration) return ytPlayer.getDuration()||t.duration||0; return audio.duration||t.duration||0; }
+// ---------- extração do áudio do YouTube (toca com tela desligada) ----------
+let ytIframeActive=false;
+const ytStreamCache={};
+const PIPED_APIS=['https://pipedapi.kavin.rocks','https://pipedapi.adminforge.de','https://pipedapi.leptons.xyz','https://pipedapi.drgns.space'];
+const INVIDIOUS_APIS=['https://yewtu.be','https://inv.nadeko.net','https://invidious.fdn.fr','https://iv.datura.network'];
+function fetchTimeout(url, opts, ms){ const c=new AbortController(); const t=setTimeout(()=>c.abort(), ms); return fetch(url, {...(opts||{}), signal:c.signal}).finally(()=>clearTimeout(t)); }
+function setYtStatus(txt){ const el=$('#ytStatus'); if(!el) return; if(!txt){ el.style.display='none'; return; } el.style.display=''; el.textContent=txt; }
+function pickAudio(list){
+  const mp4=list.filter(a=>((a.mimeType||a.type)||'').includes('audio/mp4'));
+  const pool=mp4.length?mp4:list;
+  pool.sort((a,b)=>(b.bitrate||0)-(a.bitrate||0));
+  return pool[0]||null;
+}
+async function fetchYtInnerTube(videoId){
+  const r=await fetchTimeout('https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({videoId, context:{client:{clientName:'ANDROID', clientVersion:'19.09.37'}}})}, 8000);
+  if(!r.ok) return null;
+  const j=await r.json();
+  const sd=j.streamingData||{};
+  const aud=(sd.adaptiveFormats||[]).filter(f=>(f.mimeType||'').startsWith('audio/') && f.url);
+  if(!aud.length) return null;
+  const best=pickAudio(aud);
+  if(!best) return null;
+  const len=(j.videoDetails||{}).lengthSeconds;
+  return {url:best.url, duration:len?parseInt(len):0, via:'YouTube'};
+}
+async function resolveYtAudio(videoId){
+  const cached=ytStreamCache[videoId];
+  if(cached && Date.now()-cached.at<30*60*1000) return cached;
+  try{ const s=await fetchYtInnerTube(videoId); if(s){ ytStreamCache[videoId]={...s, at:Date.now()}; return s; } }catch(e){ console.warn('innertube', e); }
+  for(const base of PIPED_APIS){
+    try{
+      const r=await fetchTimeout(base+'/streams/'+videoId, {}, 8000);
+      if(!r.ok) continue;
+      const j=await r.json();
+      const aud=(j.audioStreams||[]).filter(a=>a.url);
+      if(aud.length){ const best=pickAudio(aud); if(best){ const s={url:best.url, duration:j.duration||0, via:'Piped'}; ytStreamCache[videoId]={...s, at:Date.now()}; return s; } }
+    }catch(e){ console.warn('piped', base, e); }
+  }
+  for(const base of INVIDIOUS_APIS){
+    try{
+      const r=await fetchTimeout(base+'/api/v1/videos/'+videoId, {}, 8000);
+      if(!r.ok) continue;
+      const j=await r.json();
+      const aud=(j.adaptiveFormats||[]).filter(f=>(f.type||'').startsWith('audio/') && f.url);
+      if(aud.length){ const best=aud.sort((a,b)=>(b.bitrate||0)-(a.bitrate||0))[0]; const s={url:best.url, duration:j.lengthSeconds||0, via:'Invidious'}; ytStreamCache[videoId]={...s, at:Date.now()}; return s; }
+    }catch(e){ console.warn('invidious', base, e); }
+  }
+  try{
+    const r=await fetchTimeout('https://co.api.cobalt.tools/', {method:'POST', headers:{'Accept':'application/json','Content-Type':'application/json'}, body:JSON.stringify({url:'https://www.youtube.com/watch?v='+videoId, isAudioOnly:true})}, 8000);
+    if(r.ok){ const j=await r.json(); if(j.url){ const s={url:j.url, duration:0, via:'Cobalt'}; ytStreamCache[videoId]={...s, at:Date.now()}; return s; } }
+  }catch(e){ console.warn('cobalt', e); }
+  return null;
+}
+async function loadYoutubeTrack(t){
+  ytIframeActive=false; stopYtTimer();
+  setYtStatus('Extraindo áudio do YouTube...');
+  const stream=await resolveYtAudio(t.videoId);
+  if(!queue[qIndex] || queue[qIndex].id!==t.id) return;
+  if(stream && stream.url){
+    $('#ytWrap').style.display='none'; $('#bigCover').style.display='';
+    if(ytPlayer && ytPlayer.pauseVideo){ try{ytPlayer.pauseVideo()}catch(e){} }
+    if(audio.dataset.url){ URL.revokeObjectURL(audio.dataset.url); delete audio.dataset.url; }
+    audio.src=stream.url;
+    if(stream.duration){ t.duration=Math.round(stream.duration); dbPut('tracks',t); }
+    setYtStatus('Tocando áudio direto ('+stream.via+') — funciona com a tela desligada ✓');
+    audio.play().catch(()=>toast('Toque em ▶ para tocar'));
+  } else {
+    setYtStatus('Não consegui extrair o áudio — usando o player do YouTube (pode pausar com a tela desligada).');
+    toast('Não consegui extrair o áudio — usando o player do YouTube');
+    $('#bigCover').style.display='none'; $('#ytWrap').style.display='block';
+    playYoutube(t);
+  }
+  updatePlayerUI();
+}
+function ytViaIframe(){ return isYtTrack(queue[qIndex]) && ytIframeActive; }
+function isPlaying(){ const t=queue[qIndex]; if(ytViaIframe()){ return !!(ytPlayer&&ytPlayer.getPlayerState&&ytPlayer.getPlayerState()===1); } return !audio.paused; }
+function resumeCurrent(){ const t=queue[qIndex]; if(!t)return; if(ytViaIframe()){ if(ytPlayer&&ytPlayer.playVideo) ytPlayer.playVideo(); } else audio.play(); }
+function pauseCurrent(){ const t=queue[qIndex]; if(!t)return; if(ytViaIframe()){ if(ytPlayer&&ytPlayer.pauseVideo) ytPlayer.pauseVideo(); } else audio.pause(); }
+function togglePlay(){ const t=queue[qIndex]; if(!t)return; if(ytViaIframe()){ if(ytPlayer&&ytPlayer.getPlayerState){ ytPlayer.getPlayerState()===1?ytPlayer.pauseVideo():ytPlayer.playVideo(); } } else { audio.paused?audio.play():audio.pause(); } }
+function seekCurrent(sec){ const t=queue[qIndex]; if(!t)return; if(ytViaIframe()){ if(ytPlayer&&ytPlayer.seekTo) ytPlayer.seekTo(sec,true); } else audio.currentTime=sec; }
+function currentTime(){ const t=queue[qIndex]; if(ytViaIframe()&&ytPlayer&&ytPlayer.getCurrentTime) return ytPlayer.getCurrentTime()||0; return audio.currentTime||0; }
+function currentDuration(){ const t=queue[qIndex]; if(ytViaIframe()&&ytPlayer&&ytPlayer.getDuration) return ytPlayer.getDuration()||t.duration||0; return audio.duration||t.duration||0; }
 
 // ---------- player ----------
 function setQueueFrom(list, startTrack){
@@ -416,9 +492,9 @@ function loadCurrent(){
   stopYtTimer();
   if(isYtTrack(t)){
     audio.pause();
-    $('#bigCover').style.display='none'; $('#ytWrap').style.display='block';
-    playYoutube(t);
+    loadYoutubeTrack(t);
   } else {
+    ytIframeActive=false;
     $('#ytWrap').style.display='none'; $('#bigCover').style.display='';
     if(ytPlayer && ytPlayer.pauseVideo){ try{ytPlayer.pauseVideo()}catch(e){} }
     if(t.nativeUri && window.Capacitor && window.Capacitor.convertFileSrc){
@@ -594,7 +670,7 @@ $('#shuffleBtn').onclick=()=>{shuffle=!shuffle;updatePlayerUI();toast(shuffle?'A
 $('#repeatBtn').onclick=()=>{repeatMode=(repeatMode+1)%3;updatePlayerUI();toast(repeatMode===2?'Repetir uma':repeatMode===1?'Repetir todas':'Repetição desligada')};
 $('#favBtn2').onclick=async()=>{const t=queue[qIndex];if(!t)return;t.favorite=!t.favorite;await dbPut('tracks',t);render();updateFavBtn()};
 $('#addToPlBtn2').onclick=()=>{const t=queue[qIndex];if(t)openAddToPlaylist(t)};
-$('#volBtn').onclick=()=>{const v=prompt('Volume (0 a 100):',Math.round((isYtTrack(queue[qIndex])&&ytPlayer&&ytPlayer.getVolume?ytPlayer.getVolume():audio.volume*100)));if(v!==null){const n=Math.max(0,Math.min(100,parseInt(v)||80)); if(isYtTrack(queue[qIndex])&&ytPlayer&&ytPlayer.setVolume) ytPlayer.setVolume(n); audio.volume=n/100}};
+$('#volBtn').onclick=()=>{const v=prompt('Volume (0 a 100):',Math.round((ytViaIframe()&&ytPlayer&&ytPlayer.getVolume?ytPlayer.getVolume():audio.volume*100)));if(v!==null){const n=Math.max(0,Math.min(100,parseInt(v)||80)); if(ytViaIframe()&&ytPlayer&&ytPlayer.setVolume) ytPlayer.setVolume(n); audio.volume=n/100}};
 $('#pbInfo').onclick=()=>$('#fullPlayer').classList.add('open');
 $('#miniCover').onclick=()=>$('#fullPlayer').classList.add('open');
 $('#closeFull').onclick=()=>$('#fullPlayer').classList.remove('open');
