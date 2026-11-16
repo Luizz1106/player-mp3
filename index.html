@@ -85,6 +85,9 @@ main{max-width:720px;margin:0 auto;padding:16px}
 .big-count{text-align:center;color:#666;font-size:12px;margin-top:6px}
 .seek-wrap{max-width:520px;width:100%;margin:22px auto 0}
 .scan-status{font-size:12px;color:#c9a227;margin-top:10px;line-height:1.5;text-align:left}
+.yt-row{display:flex;gap:8px;margin-top:12px}
+.yt-row input{flex:1;background:#111;border:1px solid #333;color:#fff;border-radius:10px;padding:10px 12px;font-size:14px;min-width:0}
+.yt-note{font-size:11px;color:#888;margin-top:6px;line-height:1.4}
 .seek-wrap input{width:100%;accent-color:var(--gold)}
 .times{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:6px}
 .big-controls{display:flex;align-items:center;justify-content:center;gap:18px;margin-top:22px}
@@ -117,6 +120,7 @@ main{max-width:720px;margin:0 auto;padding:16px}
   <div class="search"><input id="search" type="search" placeholder="Buscar música ou artista..."></div>
   <div class="tabs">
     <button class="tab active" data-tab="all">🎵 Todas</button>
+    <button class="tab" data-tab="yt">▶ YouTube</button>
     <button class="tab" data-tab="fav">♥ Favoritas</button>
     <button class="tab" data-tab="playlists">📁 Playlists</button>
   </div>
@@ -133,6 +137,11 @@ main{max-width:720px;margin:0 auto;padding:16px}
       <div id="scanStatus" class="scan-status" style="display:none"></div>
       <button class="btn ghost" id="newPlBtn">＋ Nova playlist</button>
     </div>
+    <div class="yt-row">
+      <input type="url" id="ytInput" placeholder="Cole o link da música do YouTube..." inputmode="url">
+      <button class="btn" id="ytAddBtn">▶ Tocar</button>
+    </div>
+    <p class="yt-note">O YouTube pode pausar ao desligar a tela — é limite do player dele. Teste no teu celular.</p>
     <input type="file" id="fileInput" accept="audio/*,.mp3,.m4a,.wav,.ogg,.flac" multiple hidden>
     <input type="file" id="folderInput" webkitdirectory multiple hidden>
   </section>
@@ -147,6 +156,7 @@ main{max-width:720px;margin:0 auto;padding:16px}
       <li>No APK: toque em <b>🔍 Buscar músicas do celular</b> e permita o acesso às músicas — ele encontra todas sozinho, igual ao Lark Player.</li>
       <li>Toque em <b>＋ Adicionar músicas</b> e escolha os MP3 do celular.</li>
       <li>Ou toque em <b>📁 Adicionar pasta</b> e escolha a pasta Música / Downloads.</li>
+      <li>Cole o link de uma música do YouTube no campo acima e toque em <b>▶ Tocar</b> — ela fica salva na aba <b>YouTube</b>.</li>
       <li>Toque numa música para tocar. O ♥ salva nos favoritos.</li>
       <li>Para instalar: toque em <b>⬇ Instalar app</b> no topo, ou no menu ⋮ do Chrome → <b>Instalar app / Adicionar à tela inicial</b>.</li>
     </ol>
@@ -172,6 +182,7 @@ main{max-width:720px;margin:0 auto;padding:16px}
 <div class="full" id="fullPlayer">
   <button class="close" id="closeFull">‹ Biblioteca</button>
   <div class="big-cover" id="bigCover">♪</div>
+  <div id="ytWrap" style="display:none;width:100%;max-width:520px;aspect-ratio:16/9;margin:0 auto 12px;border-radius:12px;overflow:hidden;background:#000"><div id="ytPlayer" style="width:100%;height:100%"></div></div>
   <div class="big-title" id="bigTitle">—</div>
   <div class="big-artist" id="bigArtist">—</div>
   <div class="big-count" id="bigCount"></div>
@@ -269,6 +280,7 @@ function coverHTML(t,cls){
 function ensureCover(t){
   if(t._cover!==undefined) return t._cover;
   if(t.albumArtUri && window.Capacitor && window.Capacitor.convertFileSrc){ t._cover=window.Capacitor.convertFileSrc(t.albumArtUri); t.coverUrl=t._cover; return t._cover; }
+  if(t.coverUrl){ t._cover=t.coverUrl; return t._cover; }
   t._cover=t.picture?URL.createObjectURL(t.picture):null; t.coverUrl=t._cover; return t._cover;
 }
 
@@ -293,6 +305,7 @@ function filtered(){
   const q=($('#search').value||'').toLowerCase();
   let list=tracks;
   if(currentTab==='fav') list=list.filter(t=>t.favorite);
+  if(currentTab==='yt') list=list.filter(t=>t.source==='youtube');
   if(currentPlId) list=list.filter(t=>{const p=playlists.find(x=>x.id===currentPlId);return p&&p.trackIds.includes(t.id)});
   if(q) list=list.filter(t=>(t.title+' '+t.artist+' '+t.album).toLowerCase().includes(q));
   return list;
@@ -333,6 +346,59 @@ function renderPlaylists(){
   back.onclick=()=>{currentPlId=null;currentTab='all';render()}; el.appendChild(back);
 }
 
+// ---------- YouTube ----------
+let ytPlayer=null, ytTimer=null, ytApiLoading=false;
+function loadYtApi(){ return new Promise(res=>{ if(window.YT&&window.YT.Player){res(true);return} if(ytApiLoading){ const w=setInterval(()=>{if(window.YT&&window.YT.Player){clearInterval(w);res(true)}},300); setTimeout(()=>{clearInterval(w);res(!!(window.YT&&window.YT.Player))},10000); return; } ytApiLoading=true; window.onYouTubeIframeAPIReady=()=>res(true); const s=document.createElement('script'); s.src='https://www.youtube.com/iframe_api'; s.onerror=()=>res(false); document.head.appendChild(s); setTimeout(()=>res(!!(window.YT&&window.YT.Player)),10000); }); }
+function extractVideoId(u){ if(!u) return null; u=u.trim(); let m=u.match(/[?&]v=([A-Za-z0-9_-]{11})/); if(m) return m[1]; m=u.match(/youtu\.be\/([A-Za-z0-9_-]{11})/); if(m) return m[1]; m=u.match(/\/(shorts|embed|live|v)\/([A-Za-z0-9_-]{11})/); if(m) return m[2]; m=u.match(/^([A-Za-z0-9_-]{11})$/); if(m) return m[1]; return null; }
+async function addYoutube(url){
+  const id=extractVideoId(url);
+  if(!id){ toast('Link do YouTube inválido'); return; }
+  const existing=tracks.find(t=>t.videoId===id);
+  if(existing){ currentTab='yt'; render(); playTrack(existing); toast('Já estava na lista — tocando'); return; }
+  toast('Buscando dados do vídeo...');
+  let title='Vídeo do YouTube', artist='YouTube', thumb='https://i.ytimg.com/vi/'+id+'/hqdefault.jpg';
+  try{ const r=await fetch('https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v='+id+'&format=json'); if(r.ok){ const j=await r.json(); title=j.title||title; artist=j.author_name||artist; if(j.thumbnail_url) thumb=j.thumbnail_url; } }catch(e){}
+  const tr={id:'y_'+id, name:title, title, artist, album:'YouTube', duration:0, size:0, favorite:false, addedAt:Date.now(), source:'youtube', videoId:id, coverUrl:thumb, blob:null, picture:null};
+  await dbPut('tracks', tr); tracks.push(tr); tracks.sort((a,b)=>a.title.localeCompare(b.title,'pt-BR'));
+  $('#ytInput').value=''; currentTab='yt'; render(); playTrack(tr);
+}
+async function playYoutube(t){
+  const ok=await loadYtApi();
+  if(!ok){ toast('Não consegui carregar o player do YouTube. Verifique a internet.'); return; }
+  if(!ytPlayer){
+    ytPlayer=new YT.Player('ytPlayer',{width:'100%',height:'100%',videoId:t.videoId,playerVars:{autoplay:1,rel:0,playsinline:1},events:{onReady:e=>{e.target.playVideo()},onStateChange:onYtState}});
+  } else {
+    try{ ytPlayer.loadVideoById(t.videoId); }catch(e){ try{ ytPlayer.cueVideoById(t.videoId); ytPlayer.playVideo(); }catch(e2){} }
+  }
+  startYtTimer();
+}
+function onYtState(e){
+  const t=queue[qIndex]; if(!t||t.source!=='youtube')return;
+  const S=(window.YT&&YT.PlayerState)||{PLAYING:1,PAUSED:2,ENDED:0};
+  if(e.data===S.PLAYING){ updatePlayerUI(); if('mediaSession' in navigator)navigator.mediaSession.playbackState='playing'; }
+  else if(e.data===S.PAUSED){ updatePlayerUI(); if('mediaSession' in navigator)navigator.mediaSession.playbackState='paused'; }
+  else if(e.data===S.ENDED){ if(repeatMode===2){ ytPlayer.seekTo(0,true); ytPlayer.playVideo(); } else next(); }
+}
+function startYtTimer(){ stopYtTimer(); ytTimer=setInterval(ytTick,500); }
+function stopYtTimer(){ if(ytTimer){clearInterval(ytTimer);ytTimer=null} }
+function ytTick(){
+  const t=queue[qIndex]; if(!t||t.source!=='youtube'||!ytPlayer||!ytPlayer.getCurrentTime) return;
+  const d=ytPlayer.getDuration()||0, c=ytPlayer.getCurrentTime()||0;
+  if(d>0){ const p=Math.round(c/d*1000); if(!seeking){$('#seekMini').value=p;$('#seekFull').value=p} }
+  $('#pbTime').textContent=fmt(c)+' / '+fmt(d);
+  $('#curTime').textContent=fmt(c); $('#durTime').textContent=fmt(d);
+  if(d>0 && t.duration!==Math.round(d)){ t.duration=Math.round(d); dbPut('tracks',t); }
+  if('mediaSession' in navigator&&navigator.mediaSession.setPositionState){try{navigator.mediaSession.setPositionState({duration:d,playbackRate:1,position:c})}catch(e){}}
+}
+function isYtTrack(t){ return !!(t&&t.source==='youtube'); }
+function isPlaying(){ const t=queue[qIndex]; if(isYtTrack(t)){ return !!(ytPlayer&&ytPlayer.getPlayerState&&ytPlayer.getPlayerState()===1); } return !audio.paused; }
+function resumeCurrent(){ const t=queue[qIndex]; if(!t)return; if(isYtTrack(t)){ if(ytPlayer&&ytPlayer.playVideo) ytPlayer.playVideo(); } else audio.play(); }
+function pauseCurrent(){ const t=queue[qIndex]; if(!t)return; if(isYtTrack(t)){ if(ytPlayer&&ytPlayer.pauseVideo) ytPlayer.pauseVideo(); } else audio.pause(); }
+function togglePlay(){ const t=queue[qIndex]; if(!t)return; if(isYtTrack(t)){ if(ytPlayer&&ytPlayer.getPlayerState){ ytPlayer.getPlayerState()===1?ytPlayer.pauseVideo():ytPlayer.playVideo(); } } else { audio.paused?audio.play():audio.pause(); } }
+function seekCurrent(sec){ const t=queue[qIndex]; if(!t)return; if(isYtTrack(t)){ if(ytPlayer&&ytPlayer.seekTo) ytPlayer.seekTo(sec,true); } else audio.currentTime=sec; }
+function currentTime(){ const t=queue[qIndex]; if(isYtTrack(t)&&ytPlayer&&ytPlayer.getCurrentTime) return ytPlayer.getCurrentTime()||0; return audio.currentTime||0; }
+function currentDuration(){ const t=queue[qIndex]; if(isYtTrack(t)&&ytPlayer&&ytPlayer.getDuration) return ytPlayer.getDuration()||t.duration||0; return audio.duration||t.duration||0; }
+
 // ---------- player ----------
 function setQueueFrom(list, startTrack){
   queue=list.slice(); qIndex=startTrack?queue.findIndex(t=>t.id===startTrack.id):0; if(qIndex<0)qIndex=0;
@@ -347,24 +413,33 @@ function loadCurrent(){
   const t=queue[qIndex]; if(!t) return;
   ensureCover(t);
   if(currentCoverUrl) URL.revokeObjectURL(currentCoverUrl);
-  if(t.nativeUri && window.Capacitor && window.Capacitor.convertFileSrc){
-    if(audio.dataset.url){ URL.revokeObjectURL(audio.dataset.url); delete audio.dataset.url; }
-    audio.src=window.Capacitor.convertFileSrc(t.nativeUri);
+  stopYtTimer();
+  if(isYtTrack(t)){
+    audio.pause();
+    $('#bigCover').style.display='none'; $('#ytWrap').style.display='block';
+    playYoutube(t);
   } else {
-    // blob url novo a cada troca (o blob fica no IndexedDB)
-    const url=URL.createObjectURL(t.blob);
-    if(audio.dataset.url) URL.revokeObjectURL(audio.dataset.url);
-    audio.dataset.url=url; audio.src=url;
+    $('#ytWrap').style.display='none'; $('#bigCover').style.display='';
+    if(ytPlayer && ytPlayer.pauseVideo){ try{ytPlayer.pauseVideo()}catch(e){} }
+    if(t.nativeUri && window.Capacitor && window.Capacitor.convertFileSrc){
+      if(audio.dataset.url){ URL.revokeObjectURL(audio.dataset.url); delete audio.dataset.url; }
+      audio.src=window.Capacitor.convertFileSrc(t.nativeUri);
+    } else {
+      // blob url novo a cada troca (o blob fica no IndexedDB)
+      const url=URL.createObjectURL(t.blob);
+      if(audio.dataset.url) URL.revokeObjectURL(audio.dataset.url);
+      audio.dataset.url=url; audio.src=url;
+    }
+    audio.play().catch(()=>toast('Toque em ▶ para tocar'));
   }
-  audio.play().catch(()=>toast('Toque em ▶ para tocar'));
   updatePlayerUI(); renderQueue();
   if('mediaSession' in navigator){
     navigator.mediaSession.metadata=new MediaMetadata({title:t.title,artist:t.artist,album:t.album||'Meu Player MP3',artwork:t.coverUrl?[{src:t.coverUrl,sizes:'512x512',type:'image/png'}]:[]});
-    navigator.mediaSession.setActionHandler('play',()=>audio.play());
-    navigator.mediaSession.setActionHandler('pause',()=>audio.pause());
+    navigator.mediaSession.setActionHandler('play',()=>resumeCurrent());
+    navigator.mediaSession.setActionHandler('pause',()=>pauseCurrent());
     navigator.mediaSession.setActionHandler('previoustrack',()=>prev());
     navigator.mediaSession.setActionHandler('nexttrack',()=>next());
-    navigator.mediaSession.setActionHandler('seekto',e=>{if(e.seekTime!=null)audio.currentTime=e.seekTime});
+    navigator.mediaSession.setActionHandler('seekto',e=>{if(e.seekTime!=null)seekCurrent(e.seekTime)});
   }
 }
 function updatePlayerUI(){
@@ -375,7 +450,7 @@ function updatePlayerUI(){
   $('#bigCount').textContent='Música '+(qIndex+1)+' de '+queue.length+(t.album?' • '+t.album:'');
   const cov=coverHTML(t);
   $('#miniCover').innerHTML=cov; $('#bigCover').innerHTML=cov;
-  $('#playBtn').textContent=audio.paused?'▶':'⏸'; $('#playBtn2').textContent=audio.paused?'▶':'⏸';
+  $('#playBtn').textContent=isPlaying()?'⏸':'▶'; $('#playBtn2').textContent=isPlaying()?'⏸':'▶';
   $('#shuffleBtn').style.opacity=shuffle?1:.4;
   $('#repeatBtn').textContent=repeatMode===2?'🔂':repeatMode===1?'🔁':'🔁'; $('#repeatBtn').style.opacity=repeatMode?1:.4;
   updateFavBtn();
@@ -392,12 +467,12 @@ function renderQueue(){
 }
 function next(){
   if(!queue.length)return;
-  if(shuffle){qIndex=Math.floor(Math.random()*queue.length)} else {qIndex++; if(qIndex>=queue.length){if(repeatMode===1)qIndex=0;else{qIndex=queue.length-1;audio.pause();updatePlayerUI();return}}}
+  if(shuffle){qIndex=Math.floor(Math.random()*queue.length)} else {qIndex++; if(qIndex>=queue.length){if(repeatMode===1)qIndex=0;else{qIndex=queue.length-1;pauseCurrent();updatePlayerUI();return}}}
   loadCurrent();
 }
 function prev(){
   if(!queue.length)return;
-  if(audio.currentTime>3){audio.currentTime=0;return}
+  if(currentTime()>3){seekCurrent(0);return}
   qIndex--; if(qIndex<0)qIndex=shuffle?Math.floor(Math.random()*queue.length):0;
   loadCurrent();
 }
@@ -412,7 +487,7 @@ audio.addEventListener('timeupdate',()=>{
 });
 audio.addEventListener('play',()=>{updatePlayerUI();if('mediaSession' in navigator)navigator.mediaSession.playbackState='playing'});
 audio.addEventListener('pause',()=>{updatePlayerUI();if('mediaSession' in navigator)navigator.mediaSession.playbackState='paused'});
-function bindSeek(el){el.addEventListener('input',()=>{seeking=true});el.addEventListener('change',()=>{if(audio.duration)audio.currentTime=el.value/1000*audio.duration;seeking=false})}
+function bindSeek(el){el.addEventListener('input',()=>{seeking=true});el.addEventListener('change',()=>{const d=currentDuration(); if(d)seekCurrent(el.value/1000*d);seeking=false})}
 bindSeek($('#seekMini'));bindSeek($('#seekFull'));
 
 // ---------- menus / modais ----------
@@ -501,6 +576,8 @@ async function scanDevice(silent){
 }
 
 // ---------- eventos ----------
+$('#ytAddBtn').onclick=()=>addYoutube($('#ytInput').value);
+$('#ytInput').addEventListener('keydown',e=>{if(e.key==='Enter')addYoutube($('#ytInput').value)});
 $('#addFilesBtn').onclick=()=>$('#fileInput').click();
 $('#addFolderBtn').onclick=()=>$('#folderInput').click();
 $('#scanBtn').onclick=()=>scanDevice(false);
@@ -509,15 +586,15 @@ $('#folderInput').addEventListener('change',e=>{addFiles(e.target.files);e.targe
 $('#newPlBtn').onclick=newPlaylist;
 $('#search').addEventListener('input',render);
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{currentTab=b.dataset.tab;currentPlId=null;render()});
-$('#playBtn').onclick=()=>audio.paused?audio.play():audio.pause();
-$('#playBtn2').onclick=()=>audio.paused?audio.play():audio.pause();
+$('#playBtn').onclick=()=>togglePlay();
+$('#playBtn2').onclick=()=>togglePlay();
 $('#nextBtn').onclick=next; $('#nextBtn2').onclick=next;
 $('#prevBtn').onclick=prev; $('#prevBtn2').onclick=prev;
 $('#shuffleBtn').onclick=()=>{shuffle=!shuffle;updatePlayerUI();toast(shuffle?'Aleatório ligado':'Aleatório desligado')};
 $('#repeatBtn').onclick=()=>{repeatMode=(repeatMode+1)%3;updatePlayerUI();toast(repeatMode===2?'Repetir uma':repeatMode===1?'Repetir todas':'Repetição desligada')};
 $('#favBtn2').onclick=async()=>{const t=queue[qIndex];if(!t)return;t.favorite=!t.favorite;await dbPut('tracks',t);render();updateFavBtn()};
 $('#addToPlBtn2').onclick=()=>{const t=queue[qIndex];if(t)openAddToPlaylist(t)};
-$('#volBtn').onclick=()=>{const v=prompt('Volume (0 a 100):',Math.round(audio.volume*100));if(v!==null){audio.volume=Math.max(0,Math.min(100,parseInt(v)||80))/100}};
+$('#volBtn').onclick=()=>{const v=prompt('Volume (0 a 100):',Math.round((isYtTrack(queue[qIndex])&&ytPlayer&&ytPlayer.getVolume?ytPlayer.getVolume():audio.volume*100)));if(v!==null){const n=Math.max(0,Math.min(100,parseInt(v)||80)); if(isYtTrack(queue[qIndex])&&ytPlayer&&ytPlayer.setVolume) ytPlayer.setVolume(n); audio.volume=n/100}};
 $('#pbInfo').onclick=()=>$('#fullPlayer').classList.add('open');
 $('#miniCover').onclick=()=>$('#fullPlayer').classList.add('open');
 $('#closeFull').onclick=()=>$('#fullPlayer').classList.remove('open');
