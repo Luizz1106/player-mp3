@@ -35,11 +35,16 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Instalar Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Preparar Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SDKMANAGER" ] || SDKMANAGER="$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Instalar dependências
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
       - name: Preparar arquivos web
         run: |
@@ -61,27 +66,3 @@ jobs:
         run: |
           cd android
           ./gradlew assembleDebug
-
-      - name: Renomear o APK
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk Meu-Player-MP3.apk
-
-      - name: Guardar o APK como artefato
-        uses: actions/upload-artifact@v4
-        with:
-          name: Meu-Player-MP3-apk
-          path: Meu-Player-MP3.apk
-
-      - name: Publicar na Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: "Meu Player MP3 v1.0.${{ github.run_number }}"
-          body: |
-            APK do Meu Player MP3 para instalar direto no celular.
-
-            Como instalar:
-            1. Baixe o arquivo Meu-Player-MP3.apk no celular.
-            2. Toque no arquivo e permita "Instalar de fontes desconhecidas" quando o Android pedir.
-            3. Abra o app e toque em "Adicionar músicas" para escolher os MP3 do celular.
-          files: Meu-Player-MP3.apk
-          generate_release_notes: true
