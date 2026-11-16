@@ -5,6 +5,7 @@ Player de MP3 que roda no celular, instalável pelo link (PWA).
 - Adicione os MP3 que já estão no celular (arquivos ou pasta inteira)
 - As músicas ficam guardadas no navegador do celular (IndexedDB) — nada é enviado para servidor
 - Toca em segundo plano e com a tela bloqueada (Media Session API)
+- No APK, o botão **🔍 Buscar músicas do celular** varre o aparelho sozinho (MediaStore, igual ao Lark Player) — pede a permissão de áudio uma vez e lista todas as músicas, com artista, álbum e duração
 - Playlists, favoritos, aleatório, repetir, busca
 - Preto e dourado, igual ao Future Painel
 

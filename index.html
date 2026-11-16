@@ -128,6 +128,7 @@ main{max-width:720px;margin:0 auto;padding:16px}
     <div class="actions">
       <button class="btn" id="addFilesBtn">＋ Adicionar músicas</button>
       <button class="btn ghost" id="addFolderBtn">📁 Adicionar pasta</button>
+      <button class="btn ghost" id="scanBtn" style="display:none">🔍 Buscar músicas do celular</button>
       <button class="btn ghost" id="newPlBtn">＋ Nova playlist</button>
     </div>
     <input type="file" id="fileInput" accept="audio/*,.mp3,.m4a,.wav,.ogg,.flac" multiple hidden>
@@ -141,6 +142,7 @@ main{max-width:720px;margin:0 auto;padding:16px}
   <section class="howto">
     <h3>Como colocar suas músicas</h3>
     <ol>
+      <li>No APK: toque em <b>🔍 Buscar músicas do celular</b> e permita o acesso às músicas — ele encontra todas sozinho, igual ao Lark Player.</li>
       <li>Toque em <b>＋ Adicionar músicas</b> e escolha os MP3 do celular.</li>
       <li>Ou toque em <b>📁 Adicionar pasta</b> e escolha a pasta Música / Downloads.</li>
       <li>Toque numa música para tocar. O ♥ salva nos favoritos.</li>
@@ -205,6 +207,8 @@ main{max-width:720px;margin:0 auto;padding:16px}
 <script>
 const $=s=>document.querySelector(s);
 const audio=$('#audio');
+const isNative = () => !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+const mediaStore = () => window.Capacitor ? window.Capacitor.registerPlugin('CapacitorMediaStore') : null;
 let tracks=[], playlists=[], queue=[], qIndex=-1, shuffle=false, repeatMode=0; // 0 off, 1 all, 2 one
 let currentTab='all', currentPlId=null, deferredPrompt=null, currentCoverUrl=null, seeking=false;
 
@@ -262,6 +266,7 @@ function coverHTML(t,cls){
 }
 function ensureCover(t){
   if(t._cover!==undefined) return t._cover;
+  if(t.albumArtUri && window.Capacitor && window.Capacitor.convertFileSrc){ t._cover=window.Capacitor.convertFileSrc(t.albumArtUri); t.coverUrl=t._cover; return t._cover; }
   t._cover=t.picture?URL.createObjectURL(t.picture):null; t.coverUrl=t._cover; return t._cover;
 }
 
@@ -340,10 +345,16 @@ function loadCurrent(){
   const t=queue[qIndex]; if(!t) return;
   ensureCover(t);
   if(currentCoverUrl) URL.revokeObjectURL(currentCoverUrl);
-  // blob url novo a cada troca (o blob fica no IndexedDB)
-  const url=URL.createObjectURL(t.blob);
-  if(audio.dataset.url) URL.revokeObjectURL(audio.dataset.url);
-  audio.dataset.url=url; audio.src=url; audio.play().catch(()=>toast('Toque em ▶ para tocar'));
+  if(t.nativeUri && window.Capacitor && window.Capacitor.convertFileSrc){
+    if(audio.dataset.url){ URL.revokeObjectURL(audio.dataset.url); delete audio.dataset.url; }
+    audio.src=window.Capacitor.convertFileSrc(t.nativeUri);
+  } else {
+    // blob url novo a cada troca (o blob fica no IndexedDB)
+    const url=URL.createObjectURL(t.blob);
+    if(audio.dataset.url) URL.revokeObjectURL(audio.dataset.url);
+    audio.dataset.url=url; audio.src=url;
+  }
+  audio.play().catch(()=>toast('Toque em ▶ para tocar'));
   updatePlayerUI(); renderQueue();
   if('mediaSession' in navigator){
     navigator.mediaSession.metadata=new MediaMetadata({title:t.title,artist:t.artist,album:t.album||'Meu Player MP3',artwork:t.coverUrl?[{src:t.coverUrl,sizes:'512x512',type:'image/png'}]:[]});
@@ -433,9 +444,35 @@ function newPlaylist(){
   setTimeout(()=>$('#plName').focus(),50);
 }
 
+// ---------- busca automática no celular (só no APK) ----------
+async function scanDevice(silent){
+  if(!isNative()){ if(!silent) toast('A busca automática só funciona no APK'); return; }
+  try{
+    const MS=mediaStore();
+    try{ await MS.requestPermissions({types:['audio']}); }catch(e){}
+    if(!silent) toast('Buscando músicas do celular...');
+    const res=await MS.getMediasByType({mediaType:'audio', includeExternal:true, sortBy:'TITLE', limit:5000});
+    const items=(res.media||[]).filter(s=>s && (!s.mimeType || s.mimeType.indexOf('audio')===0) && (s.duration||0)>0);
+    const favByUri={}; tracks.filter(t=>t.source==='device').forEach(t=>{favByUri[t.nativeUri]=!!t.favorite});
+    for(const t of tracks.filter(t=>t.source==='device')){ await dbDel('tracks', t.id); }
+    tracks=tracks.filter(t=>t.source!=='device');
+    let added=0;
+    for(const s of items){
+      const tr={id:'d_'+String(s.id), name:s.displayName||s.title||'Música', title:s.title||s.displayName||'Música sem título', artist:s.artist||'Artista desconhecido', album:s.album||'', duration:Math.round((s.duration||0)/1000), size:s.size||0, favorite:!!favByUri[s.uri], addedAt:Date.now(), source:'device', nativeUri:s.uri, albumArtUri:s.albumArtUri||null, blob:null, picture:null};
+      await dbPut('tracks', tr); tracks.push(tr); added++;
+    }
+    tracks.sort((a,b)=>a.title.localeCompare(b.title,'pt-BR'));
+    render(); toast(added? added+' música(s) encontrada(s) no celular ✓' : 'Nenhuma música encontrada no celular');
+  }catch(e){
+    console.error(e);
+    if(!silent) toast('Não consegui buscar as músicas. Verifique a permissão de áudio do app.');
+  }
+}
+
 // ---------- eventos ----------
 $('#addFilesBtn').onclick=()=>$('#fileInput').click();
 $('#addFolderBtn').onclick=()=>$('#folderInput').click();
+$('#scanBtn').onclick=()=>scanDevice(false);
 $('#fileInput').addEventListener('change',e=>{addFiles(e.target.files);e.target.value=''});
 $('#folderInput').addEventListener('change',e=>{addFiles(e.target.files);e.target.value=''});
 $('#newPlBtn').onclick=newPlaylist;
@@ -465,7 +502,16 @@ $('#installBtn').onclick=async()=>{
 if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}))}
 
 // ---------- boot ----------
-openDB().then(loadAll).catch(e=>{$('#stats').textContent='Não foi possível abrir o armazenamento do navegador. Tente no Chrome.';console.error(e)});
+openDB().then(async()=>{
+  await loadAll();
+  if(isNative()){
+    $('#scanBtn').style.display='';
+    if(!localStorage.getItem('autoScanDone')){
+      localStorage.setItem('autoScanDone','1');
+      setTimeout(()=>scanDevice(true), 800);
+    }
+  }
+}).catch(e=>{$('#stats').textContent='Não foi possível abrir o armazenamento do navegador. Tente no Chrome.';console.error(e)});
 </script>
 </body>
 </html>
